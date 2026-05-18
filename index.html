@@ -17,6 +17,7 @@
     ::-webkit-scrollbar-thumb{background:rgba(196,160,60,0.3);border-radius:3px;}
     input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.5);}
     select option{background:#0D1B0F;color:#E8DCC8;}
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -71,6 +72,38 @@ const initialForm = {
 
 const STORAGE_KEY  = "coe_sumbar_v2_events";
 const SESSION_KEY  = "coe_sumbar_session";
+const SHEET_URL    = "https://script.google.com/macros/s/AKfycbz5JsfUPfEJDtXYWkWuabH2_JB02_F8WG3qD6rQpyzg7tJbZeRmqE4pji1EjpA2bVl1qA/exec";
+
+// ── GOOGLE SHEETS API HELPERS ─────────────────────────────────
+async function sheetSaveEvent(event) {
+  try {
+    await fetch(SHEET_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save", event }),
+    });
+  } catch(e) { console.warn("Sheet save failed:", e); }
+}
+
+async function sheetDeleteEvent(id) {
+  try {
+    await fetch(SHEET_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", id }),
+    });
+  } catch(e) { console.warn("Sheet delete failed:", e); }
+}
+
+async function sheetGetAll() {
+  try {
+    const res = await fetch(SHEET_URL + "?action=getAll");
+    const data = await res.json();
+    return data.events || null;
+  } catch(e) { console.warn("Sheet getAll failed:", e); return null; }
+}
 
 function getSeedData() {
   return [
@@ -283,10 +316,37 @@ function MainApp({ user, onLogout }) {
   const [aiResult,  setAiResult]          = useState(null);
   const importRef = useRef();
 
-  useEffect(()=>{ setEvents(loadEvents()); },[]);
+  const [sheetLoading, setSheetLoading] = useState(true);
+
+  useEffect(()=>{
+    setSheetLoading(true);
+    sheetGetAll().then(sheetEvents => {
+      if (sheetEvents && sheetEvents.length > 0) {
+        setEvents(sheetEvents);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(sheetEvents));
+      } else {
+        setEvents(loadEvents());
+      }
+      setSheetLoading(false);
+    });
+  },[]);
   useEffect(()=>{ if(events.length>0) localStorage.setItem(STORAGE_KEY,JSON.stringify(events)); },[events]);
 
   const showToast=(msg,type="success")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3500); };
+
+  const handleRefresh = () => {
+    setSheetLoading(true);
+    sheetGetAll().then(sheetEvents => {
+      if (sheetEvents && sheetEvents.length > 0) {
+        setEvents(sheetEvents);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(sheetEvents));
+        showToast(`Data diperbarui: ${sheetEvents.length} event dimuat dari server. ✓`);
+      } else {
+        showToast("Tidak ada data baru dari server.", "info");
+      }
+      setSheetLoading(false);
+    });
+  };
 
   // ── permission helpers ──────────────────────────────────────
   const canEditEvent  = (e) => isProvinsi || e.kabupatenKota === user.kabupatenKota;
@@ -309,11 +369,15 @@ function MainApp({ user, onLogout }) {
       showToast("Field wajib belum diisi: " + kosong.join(", "), "error"); return;
     }
     if (editId) {
-      setEvents(ev=>ev.map(e=>e.id===editId?{...finalForm,id:editId,createdAt:e.createdAt}:e));
-      showToast("Event berhasil diperbarui!");
+      const updated = {...finalForm, id:editId, createdAt: events.find(e=>e.id===editId)?.createdAt};
+      setEvents(ev=>ev.map(e=>e.id===editId?updated:e));
+      sheetSaveEvent(updated);
+      showToast("Event berhasil diperbarui! ✓");
     } else {
-      setEvents(ev=>[...ev,{...finalForm,id:Date.now(),createdAt:new Date().toISOString().split("T")[0]}]);
-      showToast("Event berhasil ditambahkan!");
+      const newEvent = {...finalForm, id:Date.now(), createdAt:new Date().toISOString().split("T")[0]};
+      setEvents(ev=>[...ev, newEvent]);
+      sheetSaveEvent(newEvent);
+      showToast("Event berhasil ditambahkan & disimpan ke server! ✓");
     }
     setForm(initialForm); setEditId(null); setView("list");
   };
@@ -325,12 +389,16 @@ function MainApp({ user, onLogout }) {
 
   const handleDelete = (id) => {
     setEvents(ev=>ev.filter(e=>e.id!==id));
+    sheetDeleteEvent(id);
     setDelConfirm(null); showToast("Event berhasil dihapus.","info");
     if (view==="detail") setView("list");
   };
 
   const handleAjukan = (id) => {
-    setEvents(ev=>ev.map(e=>e.id===id?{...e,status:"Diajukan"}:e));
+    setEvents(ev=>ev.map(e=>{
+      if(e.id===id){ const updated={...e,status:"Diajukan"}; sheetSaveEvent(updated); return updated; }
+      return e;
+    }));
     if (selEvent?.id===id) setSelEvent(s=>({...s,status:"Diajukan"}));
     setAjukanConfirm(null);
     showToast("Event berhasil diajukan ke Dinas Provinsi! ✓");
@@ -467,6 +535,8 @@ function MainApp({ user, onLogout }) {
             <div style={{fontSize:9,letterSpacing:2,color:"#2A2015",textTransform:"uppercase",padding:"10px 12px 6px"}}>
               Backup &amp; Data
             </div>
+            <SidebarAction icon="↻" label="Refresh Data" sub="ambil data terbaru dari server" color="#4CAF82"
+              onClick={handleRefresh} />
             <SidebarAction icon="📊" label="Export Excel" sub=".xlsx · buka di Spreadsheet" color="#4CAF82"
               onClick={()=>{exportToExcel(events);showToast("File Excel berhasil diunduh! ✓");}} />
             <SidebarAction icon="💾" label="Export JSON" sub=".json · backup semua data" color="#7EB8F7"
@@ -502,16 +572,32 @@ function MainApp({ user, onLogout }) {
               {new Date().toLocaleDateString("id-ID",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}
             </div>
           </div>
-          {view!=="form"&&(
-            <button onClick={()=>{
-              const base={...initialForm};
-              if(!isProvinsi) base.kabupatenKota=user.kabupatenKota;
-              setForm(base); setEditId(null); setView("form");
-            }} style={{padding:"8px 16px",background:"linear-gradient(135deg,#C4A03C,#A07828)",
-              color:"#0D1B0F",border:"none",borderRadius:6,fontSize:12,fontWeight:"bold",cursor:"pointer"}}>
-              + Tambah Event
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            {sheetLoading && (
+              <div style={{fontSize:11,color:"#4CAF82",display:"flex",alignItems:"center",gap:6}}>
+                <span style={{display:"inline-block",width:10,height:10,borderRadius:"50%",
+                  border:"2px solid #4CAF82",borderTopColor:"transparent",
+                  animation:"spin 0.8s linear infinite"}} />
+                Memuat data...
+              </div>
+            )}
+            <button onClick={handleRefresh} title="Refresh data dari server"
+              style={{padding:"8px 12px",background:"rgba(78,180,130,0.08)",
+                color:"#4CAF82",border:"1px solid rgba(78,180,130,0.25)",
+                borderRadius:6,fontSize:12,cursor:"pointer"}}>
+              ↻ Refresh
             </button>
-          )}
+            {view!=="form"&&(
+              <button onClick={()=>{
+                const base={...initialForm};
+                if(!isProvinsi) base.kabupatenKota=user.kabupatenKota;
+                setForm(base); setEditId(null); setView("form");
+              }} style={{padding:"8px 16px",background:"linear-gradient(135deg,#C4A03C,#A07828)",
+                color:"#0D1B0F",border:"none",borderRadius:6,fontSize:12,fontWeight:"bold",cursor:"pointer"}}>
+                + Tambah Event
+              </button>
+            )}
+          </div>
         </div>
 
         <div style={{padding:"24px 30px"}}>
