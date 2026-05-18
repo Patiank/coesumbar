@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Calendar of Events – Dinas Pariwisata Sumatera Barat</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#0D1B0F;font-family:'Georgia','Times New Roman',serif;}
+    input,select,textarea{font-family:inherit;}
+    ::-webkit-scrollbar{width:6px;height:6px;}
+    ::-webkit-scrollbar-track{background:rgba(255,255,255,0.03);}
+    ::-webkit-scrollbar-thumb{background:rgba(196,160,60,0.3);border-radius:3px;}
+    input[type=date]::-webkit-calendar-picker-indicator{filter:invert(0.5);}
+    select option{background:#0D1B0F;color:#E8DCC8;}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const XLSX_LIB = window.XLSX;
+
+
+// ── KONSTANTA ─────────────────────────────────────────────────
+const KABUPATEN_KOTA = [
+  "Provinsi Sumatera Barat",
+  "Kota Padang","Kota Bukittinggi","Kota Payakumbuh","Kota Padang Panjang",
+  "Kota Solok","Kota Pariaman","Kota Sawahlunto",
+  "Kabupaten Agam","Kabupaten Tanah Datar","Kabupaten Padang Pariaman",
+  "Kabupaten Pesisir Selatan","Kabupaten Solok","Kabupaten Solok Selatan",
+  "Kabupaten Sijunjung","Kabupaten Dharmasraya","Kabupaten Lima Puluh Kota",
+  "Kabupaten Pasaman","Kabupaten Pasaman Barat","Kabupaten Kepulauan Mentawai",
+];
+
+const KATEGORI = [
+  "Festival Budaya","Olahraga & Adventure","Kuliner","Seni & Pertunjukan",
+  "Religi & Tradisi","MICE","Alam & Ekowisata","Pameran & Expo",
+];
+
+const BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+
+// Status hanya Draft vs Diajukan (ajukan = sudah dikirim ke provinsi)
+const STATUS_BADGE = {
+  "Draft":    { bg:"#1A1A2A", color:"#8A8AA0", border:"#2A2A4A" },
+  "Diajukan": { bg:"#0A2218", color:"#4CAF82", border:"#0E4028" },
+};
+
+// Demo accounts: { username, password, role, kabupatenKota }
+// role: "provinsi" | "kabkota"
+const ACCOUNTS = [
+  { username:"admin.provinsi", password:"sumbarrancak", role:"provinsi", kabupatenKota:"Provinsi Sumatera Barat", nama:"Admin Dinas Provinsi Sumbar" },
+  ...KABUPATEN_KOTA.map((k,i)=>({
+    username: "admin." + k.toLowerCase().replace(/\s+/g,".").replace(/\//g,""),
+    password: "sumbarrancak",
+    role: "kabkota",
+    kabupatenKota: k,
+    nama: `Admin Dispar ${k}`,
+  })),
+];
+
+const initialForm = {
+  namaEvent:"", kabupatenKota:"", kategori:"", tanggalMulai:"",
+  tanggalSelesai:"", lokasi:"", deskripsi:"", targetWisatawan:"",
+  kontakNama:"", kontakHP:"", kontakEmail:"", anggaran:"", status:"Draft",
+};
+
+const STORAGE_KEY  = "coe_sumbar_v2_events";
+const SESSION_KEY  = "coe_sumbar_session";
+
+function getSeedData() {
+  return [
+    { id:1, namaEvent:"Pesona Budaya Hoyak Tabuik Piaman", kabupatenKota:"Kota Pariaman",
+      kategori:"Festival Budaya", tanggalMulai:"2025-07-05", tanggalSelesai:"2025-07-14",
+      lokasi:"Pantai Gandoriah, Pariaman", deskripsi:"Festival tradisi tabuik yang digelar setiap Muharram.",
+      targetWisatawan:"5000", kontakNama:"Dedi Rahmat", kontakHP:"081234567890",
+      kontakEmail:"pariwisata@pariaman.go.id", anggaran:"500000000", status:"Diajukan", createdAt:"2025-01-10" },
+    { id:2, namaEvent:"Tour de Singkarak", kabupatenKota:"Kabupaten Solok",
+      kategori:"Olahraga & Adventure", tanggalMulai:"2025-10-15", tanggalSelesai:"2025-10-22",
+      lokasi:"Danau Singkarak & sekitarnya", deskripsi:"Balap sepeda internasional mengelilingi alam Sumatera Barat.",
+      targetWisatawan:"20000", kontakNama:"Roni Amir", kontakHP:"082345678901",
+      kontakEmail:"pariwisata@solok.go.id", anggaran:"2000000000", status:"Diajukan", createdAt:"2025-02-01" },
+    { id:3, namaEvent:"Festival Rendang Dunia", kabupatenKota:"Kota Padang",
+      kategori:"Kuliner", tanggalMulai:"2025-09-20", tanggalSelesai:"2025-09-22",
+      lokasi:"GOR H. Agus Salim, Padang", deskripsi:"Festival kuliner rendang sebagai warisan budaya UNESCO.",
+      targetWisatawan:"10000", kontakNama:"Sari Dewi", kontakHP:"083456789012",
+      kontakEmail:"pariwisata@padang.go.id", anggaran:"750000000", status:"Draft", createdAt:"2025-03-15" },
+  ];
+}
+
+function loadEvents() {
+  try { const r=localStorage.getItem(STORAGE_KEY); return r?JSON.parse(r):getSeedData(); }
+  catch { return getSeedData(); }
+}
+function loadSession() {
+  try { const r=sessionStorage.getItem(SESSION_KEY); return r?JSON.parse(r):null; }
+  catch { return null; }
+}
+
+// ── EXPORT EXCEL ──────────────────────────────────────────────
+function exportToExcel(events) {
+  const rows = events.map((e,i)=>({
+    "No":i+1,"Nama Event":e.namaEvent,"Provinsi / Kabupaten / Kota":e.kabupatenKota,
+    "Kategori":e.kategori,"Tanggal Mulai":e.tanggalMulai,"Tanggal Selesai":e.tanggalSelesai||"-",
+    "Lokasi / Venue":e.lokasi||"-","Deskripsi":e.deskripsi||"-",
+    "Target Wisatawan":e.targetWisatawan?parseInt(e.targetWisatawan):0,
+    "Estimasi Anggaran (Rp)":e.anggaran?parseInt(e.anggaran):0,
+    "Narahubung":e.kontakNama||"-","No. HP":e.kontakHP||"-",
+    "Email":e.kontakEmail||"-","Status":e.status,"Tanggal Input":e.createdAt||"-",
+  }));
+  const ws=XLSX_LIB.utils.json_to_sheet(rows);
+  ws["!cols"]=[{wch:5},{wch:35},{wch:25},{wch:20},{wch:14},{wch:14},{wch:30},{wch:40},{wch:18},{wch:22},{wch:20},{wch:16},{wch:28},{wch:12},{wch:14}];
+  const wb=XLSX_LIB.utils.book_new();
+  XLSX_LIB.utils.book_append_sheet(wb,ws,"Calendar of Events");
+  const kc={},kab={};
+  events.forEach(e=>{kc[e.kategori]=(kc[e.kategori]||0)+1;kab[e.kabupatenKota]=(kab[e.kabupatenKota]||0)+1;});
+  const s2=[
+    {"Ringkasan":"Total Event","Jumlah":events.length},
+    {"Ringkasan":"Sudah Diajukan","Jumlah":events.filter(e=>e.status==="Diajukan").length},
+    {"Ringkasan":"Masih Draft","Jumlah":events.filter(e=>e.status==="Draft").length},
+    {"Ringkasan":"Total Target Wisatawan","Jumlah":events.reduce((s,e)=>s+parseInt(e.targetWisatawan||0),0)},
+    {"Ringkasan":"","Jumlah":""},
+    {"Ringkasan":"— Per Kategori —","Jumlah":""},
+    ...Object.entries(kc).map(([k,v])=>({Ringkasan:k,Jumlah:v})),
+    {"Ringkasan":"","Jumlah":""},
+    {"Ringkasan":"— Per Kab/Kota —","Jumlah":""},
+    ...Object.entries(kab).map(([k,v])=>({Ringkasan:k,Jumlah:v})),
+  ];
+  const ws2=XLSX_LIB.utils.json_to_sheet(s2); ws2["!cols"]=[{wch:30},{wch:15}];
+  XLSX_LIB.utils.book_append_sheet(wb,ws2,"Ringkasan");
+  XLSX_LIB.writeFile(wb,`CoE_SumBar_${new Date().toISOString().split("T")[0]}.xlsx`);
+}
+
+function exportToJSON(events) {
+  const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),total:events.length,events},null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url;
+  a.download=`CoE_SumBar_Backup_${new Date().toISOString().split("T")[0]}.json`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ROOT
+// ══════════════════════════════════════════════════════════════
+function App() {
+  const [user, setUser] = useState(()=>loadSession());
+
+  const login  = (u)=>{ sessionStorage.setItem(SESSION_KEY,JSON.stringify(u)); setUser(u); };
+  const logout = ()=>{ sessionStorage.removeItem(SESSION_KEY); setUser(null); };
+
+  if (!user) return <LoginScreen onLogin={login} />;
+  return <MainApp user={user} onLogout={logout} />;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  LOGIN SCREEN
+// ══════════════════════════════════════════════════════════════
+function LoginScreen({ onLogin }) {
+  const [uname, setUname] = useState("");
+  const [pass,  setPass]  = useState("");
+  const [err,   setErr]   = useState("");
+  const [show,  setShow]  = useState(false);
+  const [hint,  setHint]  = useState(false);
+
+  const doLogin = () => {
+    const acc = ACCOUNTS.find(a=>a.username===uname.trim()&&a.password===pass);
+    if (!acc) { setErr("Username atau password salah."); return; }
+    onLogin(acc);
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:"#0D1B0F",display:"flex",alignItems:"center",justifyContent:"center",
+      fontFamily:"'Georgia','Times New Roman',serif",
+      backgroundImage:`radial-gradient(ellipse at 30% 40%,rgba(196,160,60,.09) 0%,transparent 55%),
+                       radial-gradient(ellipse at 75% 70%,rgba(34,85,34,.18) 0%,transparent 50%)`}}>
+      <div style={{width:380,background:"rgba(8,20,10,0.97)",border:"1px solid rgba(196,160,60,0.2)",
+        borderRadius:16,padding:"40px 36px",boxShadow:"0 24px 60px rgba(0,0,0,0.6)"}}>
+
+        {/* logo */}
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{fontSize:36,marginBottom:10}}>🏔</div>
+          <div style={{fontSize:9,letterSpacing:3,color:"#C4A03C",textTransform:"uppercase",marginBottom:4}}>Dinas Pariwisata</div>
+          <div style={{fontSize:20,fontWeight:"bold",color:"#E8DCC8"}}>Sumatera Barat</div>
+          <div style={{fontSize:10,color:"#6A5830",marginTop:3,letterSpacing:1}}>Calendar of Events · Sistem Pendataan</div>
+        </div>
+
+        <div style={{marginBottom:16}}>
+          <label style={{fontSize:11,color:"#6A5830",display:"block",marginBottom:6}}>Username</label>
+          <input value={uname} onChange={e=>{setUname(e.target.value);setErr("");}}
+            onKeyDown={e=>e.key==="Enter"&&doLogin()}
+            placeholder="admin.provinsi / admin.kota.padang"
+            style={{...IS,width:"100%",boxSizing:"border-box"}} />
+        </div>
+
+        <div style={{marginBottom:8}}>
+          <label style={{fontSize:11,color:"#6A5830",display:"block",marginBottom:6}}>Password</label>
+          <div style={{position:"relative"}}>
+            <input value={pass} onChange={e=>{setPass(e.target.value);setErr("");}}
+              onKeyDown={e=>e.key==="Enter"&&doLogin()}
+              type={show?"text":"password"} placeholder="••••••••"
+              style={{...IS,width:"100%",boxSizing:"border-box",paddingRight:40}} />
+            <button onClick={()=>setShow(s=>!s)}
+              style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",
+                background:"none",border:"none",color:"#6A5830",cursor:"pointer",fontSize:14,padding:0}}>
+              {show?"🙈":"👁"}
+            </button>
+          </div>
+        </div>
+
+        {err && <div style={{fontSize:11,color:"#E05A5A",marginBottom:10,padding:"6px 10px",background:"rgba(224,90,90,0.08)",borderRadius:5}}>{err}</div>}
+
+        <button onClick={doLogin} style={{
+          width:"100%",padding:"11px",background:"linear-gradient(135deg,#C4A03C,#A07828)",
+          color:"#0D1B0F",border:"none",borderRadius:8,fontSize:13,fontWeight:"bold",
+          cursor:"pointer",marginTop:8,letterSpacing:.5}}>
+          Masuk
+        </button>
+
+        {/* hint demo */}
+        <div style={{marginTop:20,textAlign:"center"}}>
+          <button onClick={()=>setHint(h=>!h)}
+            style={{fontSize:10,color:"#4A3820",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>
+            {hint?"Sembunyikan":"Lihat semua akun demo"}
+          </button>
+          {hint&&(
+            <div style={{marginTop:10,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(196,160,60,0.1)",
+              borderRadius:8,padding:12,textAlign:"left",maxHeight:260,overflowY:"auto"}}>
+              <div style={{fontSize:10,color:"#6A5830",marginBottom:5,fontWeight:"bold"}}>ADMIN PROVINSI</div>
+              <div style={{fontSize:10,color:"#8A7860",fontFamily:"monospace",marginBottom:10,
+                background:"rgba(196,160,60,0.06)",padding:"4px 8px",borderRadius:4,
+                cursor:"pointer"}}
+                onClick={()=>{setUname("admin.provinsi");setPass("sumbarrancak");setHint(false);}}>
+                admin.provinsi &nbsp;·&nbsp; sumbarrancak
+              </div>
+              <div style={{fontSize:10,color:"#6A5830",marginBottom:5,fontWeight:"bold"}}>
+                ADMIN KAB/KOTA <span style={{color:"#3A3020",fontWeight:"normal"}}>(password: sumbarrancak)</span>
+              </div>
+              {ACCOUNTS.filter(a=>a.role==="kabkota").map(a=>(
+                <div key={a.username}
+                  style={{fontSize:10,color:"#8A7860",fontFamily:"monospace",
+                    padding:"3px 8px",borderRadius:3,marginBottom:2,
+                    background:"rgba(255,255,255,0.02)",cursor:"pointer"}}
+                  onClick={()=>{setUname(a.username);setPass("sumbarrancak");setHint(false);}}>
+                  {a.username}
+                </div>
+              ))}
+              <div style={{fontSize:9,color:"#3A3020",marginTop:8,fontStyle:"italic"}}>✱ klik username untuk mengisi otomatis</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MAIN APP
+// ══════════════════════════════════════════════════════════════
+function MainApp({ user, onLogout }) {
+  const isProvinsi = user.role === "provinsi";
+
+  const [events, setEvents]               = useState([]);
+  const [view,   setView]                 = useState("dashboard");
+  const [form,   setForm]                 = useState(initialForm);
+  const [editId, setEditId]               = useState(null);
+  const [selEvent, setSelEvent]           = useState(null);
+  const [filterKab, setFilterKab]         = useState("");
+  const [filterKat, setFilterKat]         = useState("");
+  const [filterStatus, setFilterStatus]   = useState("");
+  const [filterBulan, setFilterBulan]     = useState("");
+  const [searchQ, setSearchQ]             = useState("");
+  const [calYear,  setCalYear]            = useState(2025);
+  const [calMonth, setCalMonth]           = useState(new Date().getMonth());
+  const [toast,   setToast]               = useState(null);
+  const [delConfirm, setDelConfirm]       = useState(null);
+  const [ajukanConfirm, setAjukanConfirm] = useState(null);
+  const [importConfirm, setImportConfirm] = useState(null);
+  const [aiLoading, setAiLoading]         = useState(false);
+  const [aiResult,  setAiResult]          = useState(null);
+  const importRef = useRef();
+
+  useEffect(()=>{ setEvents(loadEvents()); },[]);
+  useEffect(()=>{ if(events.length>0) localStorage.setItem(STORAGE_KEY,JSON.stringify(events)); },[events]);
+
+  const showToast=(msg,type="success")=>{ setToast({msg,type}); setTimeout(()=>setToast(null),3500); };
+
+  // ── permission helpers ──────────────────────────────────────
+  const canEditEvent  = (e) => isProvinsi || e.kabupatenKota === user.kabupatenKota;
+  const canAddEvent   = () => true; // both roles can add; kab/kota locked to their region
+
+  // ── CRUD ────────────────────────────────────────────────────
+  const handleSubmit = () => {
+    // Untuk admin kab/kota, pastikan kabupatenKota selalu terisi dari user session
+    const finalForm = !isProvinsi
+      ? { ...form, kabupatenKota: user.kabupatenKota }
+      : { ...form };
+
+    if (!finalForm.namaEvent || !finalForm.kabupatenKota || !finalForm.tanggalMulai || !finalForm.kategori) {
+      // Bantu user tahu field mana yang kosong
+      const kosong = [];
+      if (!finalForm.namaEvent) kosong.push("Nama Event");
+      if (!finalForm.kabupatenKota) kosong.push("Kabupaten/Kota");
+      if (!finalForm.tanggalMulai) kosong.push("Tanggal Mulai");
+      if (!finalForm.kategori) kosong.push("Kategori");
+      showToast("Field wajib belum diisi: " + kosong.join(", "), "error"); return;
+    }
+    if (editId) {
+      setEvents(ev=>ev.map(e=>e.id===editId?{...finalForm,id:editId,createdAt:e.createdAt}:e));
+      showToast("Event berhasil diperbarui!");
+    } else {
+      setEvents(ev=>[...ev,{...finalForm,id:Date.now(),createdAt:new Date().toISOString().split("T")[0]}]);
+      showToast("Event berhasil ditambahkan!");
+    }
+    setForm(initialForm); setEditId(null); setView("list");
+  };
+
+  const handleEdit = (e) => {
+    if (!canEditEvent(e)) return;
+    setForm({...e}); setEditId(e.id); setView("form");
+  };
+
+  const handleDelete = (id) => {
+    setEvents(ev=>ev.filter(e=>e.id!==id));
+    setDelConfirm(null); showToast("Event berhasil dihapus.","info");
+    if (view==="detail") setView("list");
+  };
+
+  const handleAjukan = (id) => {
+    setEvents(ev=>ev.map(e=>e.id===id?{...e,status:"Diajukan"}:e));
+    if (selEvent?.id===id) setSelEvent(s=>({...s,status:"Diajukan"}));
+    setAjukanConfirm(null);
+    showToast("Event berhasil diajukan ke Dinas Provinsi! ✓");
+  };
+
+  // ── IMPORT ──────────────────────────────────────────────────
+  const handleImportFile = (e) => {
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>{
+      try {
+        const parsed=JSON.parse(ev.target.result);
+        const imported=parsed.events||(Array.isArray(parsed)?parsed:null);
+        if(!imported||!imported.length){ showToast("File tidak valid atau kosong.","error"); return; }
+        setImportConfirm({events:imported,count:imported.length});
+      } catch { showToast("Gagal membaca file JSON.","error"); }
+    };
+    reader.readAsText(file); e.target.value="";
+  };
+
+  const confirmImport = (mode) => {
+    if(!importConfirm) return;
+    if(mode==="replace"){
+      setEvents(importConfirm.events);
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(importConfirm.events));
+      showToast(`${importConfirm.count} event berhasil di-restore.`);
+    } else {
+      const merged=[...events,...importConfirm.events.filter(ie=>!events.find(e=>e.id===ie.id))];
+      setEvents(merged); localStorage.setItem(STORAGE_KEY,JSON.stringify(merged));
+      showToast(`${importConfirm.count} event berhasil digabungkan.`);
+    }
+    setImportConfirm(null);
+  };
+
+  // ── AI ───────────────────────────────────────────────────────
+  const generateAI = async()=>{
+    setAiLoading(true); setAiResult(null);
+    try {
+      const summary=events.map(e=>`- ${e.namaEvent} (${e.kabupatenKota}, ${e.kategori}, ${e.tanggalMulai}, status:${e.status})`).join("\n");
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,
+          messages:[{role:"user",content:`Kamu adalah analis pariwisata Sumatera Barat. Berikan analisis singkat (3-4 paragraf) tentang Calendar of Events berikut, mencakup: distribusi event per kategori, potensi wisatawan, rekomendasi pengembangan, dan event unggulan. Gunakan bahasa Indonesia formal.\n\nDaftar Event:\n${summary}`}]})});
+      const data=await res.json();
+      setAiResult(data.content?.[0]?.text||"Gagal menganalisis.");
+    } catch { setAiResult("Terjadi kesalahan saat menghubungi AI."); }
+    setAiLoading(false);
+  };
+
+  // ── FILTER ───────────────────────────────────────────────────
+  const filtered = events.filter(e=>{
+    const q=searchQ.toLowerCase();
+    return (!q||e.namaEvent.toLowerCase().includes(q)||e.lokasi?.toLowerCase().includes(q))
+      &&(!filterKab||e.kabupatenKota===filterKab)
+      &&(!filterKat||e.kategori===filterKat)
+      &&(!filterStatus||e.status===filterStatus)
+      &&(!filterBulan||(e.tanggalMulai&&new Date(e.tanggalMulai).getMonth()===parseInt(filterBulan)));
+  });
+
+  // ── CALENDAR ─────────────────────────────────────────────────
+  const getDIM=(y,m)=>new Date(y,m+1,0).getDate();
+  const getFD =(y,m)=>new Date(y,m,1).getDay();
+  const eInDay=(day)=>events.filter(e=>{
+    if(!e.tanggalMulai) return false;
+    const s=new Date(e.tanggalMulai), en=e.tanggalSelesai?new Date(e.tanggalSelesai):s;
+    const d=new Date(calYear,calMonth,day); return d>=s&&d<=en;
+  });
+
+  // ── STATS ────────────────────────────────────────────────────
+  const totalEvt   = events.length;
+  const totalTarget= events.reduce((s,e)=>s+parseInt(e.targetWisatawan||0),0);
+  const diajukan   = events.filter(e=>e.status==="Diajukan").length;
+  const draftEvt   = events.filter(e=>e.status==="Draft").length;
+
+  // ── NAV ──────────────────────────────────────────────────────
+  const navItems=[
+    {key:"dashboard",label:"Dashboard",   icon:"◈"},
+    {key:"form",     label:"Tambah Event",icon:"✦"},
+    {key:"list",     label:"Daftar Event",icon:"≡"},
+    {key:"calendar", label:"Kalender",    icon:"⊞"},
+  ];
+  const viewLabel={dashboard:"Dashboard Ikhtisar",form:editId?"Edit Event":"Tambah Event Baru",
+    list:"Daftar Seluruh Event",calendar:"Tampilan Kalender",detail:"Detail Event"}[view];
+
+  // ══════════════════════════════════════════════════════════════
+  return (
+    <div style={{fontFamily:"'Georgia','Times New Roman',serif",minHeight:"100vh",background:"#0D1B0F",color:"#E8DCC8"}}>
+      <div style={{position:"fixed",inset:0,zIndex:0,pointerEvents:"none",
+        backgroundImage:`radial-gradient(ellipse at 20% 50%,rgba(196,160,60,.07) 0%,transparent 60%),
+                         radial-gradient(ellipse at 80% 20%,rgba(34,85,34,.14) 0%,transparent 50%)`}} />
+
+      {/* ── SIDEBAR ── */}
+      <div style={{position:"fixed",left:0,top:0,bottom:0,width:232,
+        background:"rgba(7,18,9,0.98)",borderRight:"1px solid rgba(196,160,60,0.15)",
+        display:"flex",flexDirection:"column",zIndex:100}}>
+
+        {/* logo */}
+        <div style={{padding:"24px 20px 18px",borderBottom:"1px solid rgba(196,160,60,0.1)"}}>
+          <div style={{fontSize:9,letterSpacing:3,color:"#C4A03C",textTransform:"uppercase",marginBottom:4}}>Dinas Pariwisata</div>
+          <div style={{fontSize:16,fontWeight:"bold",color:"#E8DCC8",lineHeight:1.2}}>Sumatera Barat</div>
+          <div style={{fontSize:9,color:"#5A4820",marginTop:3,letterSpacing:1}}>Calendar of Events</div>
+        </div>
+
+        {/* user badge */}
+        <div style={{margin:"12px 12px 0",padding:"10px 12px",
+          background: isProvinsi?"rgba(196,160,60,0.08)":"rgba(78,180,130,0.07)",
+          border:`1px solid ${isProvinsi?"rgba(196,160,60,0.2)":"rgba(78,180,130,0.15)"}`,
+          borderRadius:8}}>
+          <div style={{fontSize:9,color:isProvinsi?"#C4A03C":"#4CAF82",letterSpacing:1,textTransform:"uppercase",marginBottom:3}}>
+            {isProvinsi?"🏛 Admin Provinsi":"🏘 Admin Kab/Kota"}
+          </div>
+          <div style={{fontSize:11,color:"#C8B890",fontWeight:600,lineHeight:1.3}}>{user.nama}</div>
+          {!isProvinsi&&<div style={{fontSize:10,color:"#5A5040",marginTop:2}}>{user.kabupatenKota}</div>}
+        </div>
+
+        {/* main nav */}
+        <nav style={{padding:"12px 10px 6px"}}>
+          <div style={{fontSize:9,letterSpacing:2,color:"#2A2015",textTransform:"uppercase",padding:"6px 12px 6px"}}>Menu</div>
+          {navItems.map(n=>(
+            <button key={n.key} onClick={()=>{setView(n.key);setForm(initialForm);setEditId(null);}}
+              style={{display:"flex",alignItems:"center",gap:10,width:"100%",
+                padding:"9px 12px",marginBottom:2,borderRadius:7,border:"none",
+                background:view===n.key?"rgba(196,160,60,0.12)":"transparent",
+                color:view===n.key?"#C4A03C":"#7A6E5A",fontSize:13,cursor:"pointer",textAlign:"left",
+                borderLeft:view===n.key?"2px solid #C4A03C":"2px solid transparent",transition:"all 0.18s"}}>
+              <span style={{fontSize:14}}>{n.icon}</span>{n.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* ── BACKUP & DATA — hanya Admin Provinsi ── */}
+        {isProvinsi && (
+          <div style={{padding:"2px 10px",borderTop:"1px solid rgba(196,160,60,0.08)",marginTop:4}}>
+            <div style={{fontSize:9,letterSpacing:2,color:"#2A2015",textTransform:"uppercase",padding:"10px 12px 6px"}}>
+              Backup &amp; Data
+            </div>
+            <SidebarAction icon="📊" label="Export Excel" sub=".xlsx · buka di Spreadsheet" color="#4CAF82"
+              onClick={()=>{exportToExcel(events);showToast("File Excel berhasil diunduh! ✓");}} />
+            <SidebarAction icon="💾" label="Export JSON" sub=".json · backup semua data" color="#7EB8F7"
+              onClick={()=>{exportToJSON(events);showToast("File backup JSON berhasil diunduh! ✓");}} />
+            <SidebarAction icon="📂" label="Import JSON" sub="restore dari file backup" color="#E8A820"
+              onClick={()=>importRef.current?.click()} />
+            <input ref={importRef} type="file" accept=".json" style={{display:"none"}} onChange={handleImportFile} />
+          </div>
+        )}
+
+        {/* logout */}
+        <div style={{marginTop:"auto",padding:"12px 12px 16px",borderTop:"1px solid rgba(196,160,60,0.08)"}}>
+          <button onClick={onLogout}
+            style={{display:"flex",alignItems:"center",gap:8,width:"100%",
+              padding:"8px 12px",borderRadius:7,border:"1px solid rgba(224,90,90,0.2)",
+              background:"rgba(224,90,90,0.05)",color:"#A05050",fontSize:11,cursor:"pointer",textAlign:"left"}}>
+            <span>⬡</span> Keluar
+          </button>
+          <div style={{fontSize:9,color:"#1A1A10",marginTop:8,paddingLeft:2}}>v1.2 · 2025 · Sumatera Barat</div>
+          <div style={{fontSize:9,color:"#3A3020",marginTop:4,paddingLeft:2}}>design by <span style={{color:"#C4A03C",letterSpacing:.5}}>minangkaos</span></div>
+        </div>
+      </div>
+
+      {/* ── MAIN ── */}
+      <div style={{marginLeft:232,minHeight:"100vh",position:"relative",zIndex:1}}>
+        <div style={{padding:"17px 30px",borderBottom:"1px solid rgba(196,160,60,0.08)",
+          background:"rgba(7,18,9,0.82)",backdropFilter:"blur(12px)",
+          position:"sticky",top:0,zIndex:50,
+          display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:18,fontWeight:"bold",color:"#E8DCC8"}}>{viewLabel}</div>
+            <div style={{fontSize:10,color:"#4A4030",marginTop:2}}>
+              {new Date().toLocaleDateString("id-ID",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}
+            </div>
+          </div>
+          {view!=="form"&&(
+            <button onClick={()=>{
+              const base={...initialForm};
+              if(!isProvinsi) base.kabupatenKota=user.kabupatenKota;
+              setForm(base); setEditId(null); setView("form");
+            }} style={{padding:"8px 16px",background:"linear-gradient(135deg,#C4A03C,#A07828)",
+              color:"#0D1B0F",border:"none",borderRadius:6,fontSize:12,fontWeight:"bold",cursor:"pointer"}}>
+              + Tambah Event
+            </button>
+          )}
+        </div>
+
+        <div style={{padding:"24px 30px"}}>
+
+          {/* ── DASHBOARD ── */}
+          {view==="dashboard"&&(
+            <div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:24}}>
+                {[
+                  {label:"Total Event",value:totalEvt,icon:"✦",color:"#C4A03C"},
+                  {label:"Sudah Diajukan",value:diajukan,icon:"✉",color:"#4CAF82"},
+                  {label:"Target Wisatawan",value:totalTarget.toLocaleString("id-ID"),icon:"⊙",color:"#7EB8F7"},
+                ].map((s,i)=>(
+                  <div key={i} style={{background:"rgba(255,255,255,0.025)",border:"1px solid rgba(196,160,60,0.1)",borderRadius:12,padding:"18px 20px"}}>
+                    <div style={{fontSize:22,color:s.color,marginBottom:8}}>{s.icon}</div>
+                    <div style={{fontSize:26,fontWeight:"bold",color:"#E8DCC8"}}>{s.value}</div>
+                    <div style={{fontSize:11,color:"#5A5040",marginTop:4}}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:20}}>
+                <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(196,160,60,0.08)",borderRadius:12,padding:20}}>
+                  <div style={{fontSize:10,color:"#C4A03C",marginBottom:14,letterSpacing:2,textTransform:"uppercase"}}>Event Terbaru</div>
+                  {events.slice(-6).reverse().map(e=>(
+                    <div key={e.id} onClick={()=>{setSelEvent(e);setView("detail");}}
+                      style={{padding:"8px 0",borderBottom:"1px solid rgba(255,255,255,0.03)",cursor:"pointer"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:7}}>
+                        <span style={{fontSize:13,color:"#E8DCC8",fontWeight:600,flex:1}}>{e.namaEvent}</span>
+                        <StatusBadge status={e.status}/>
+                      </div>
+                      <div style={{fontSize:10,color:"#4A4030",marginTop:2}}>{e.kabupatenKota} · {e.tanggalMulai}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(196,160,60,0.08)",borderRadius:12,padding:20}}>
+                  <div style={{fontSize:10,color:"#C4A03C",marginBottom:14,letterSpacing:2,textTransform:"uppercase"}}>Distribusi Kategori</div>
+                  {KATEGORI.map(k=>{
+                    const count=events.filter(e=>e.kategori===k).length;
+                    const pct=totalEvt?Math.round(count/totalEvt*100):0;
+                    return count>0?(
+                      <div key={k} style={{marginBottom:9}}>
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#7A6E5A",marginBottom:3}}>
+                          <span>{k}</span><span>{count}</span>
+                        </div>
+                        <div style={{height:3,background:"rgba(255,255,255,0.05)",borderRadius:4}}>
+                          <div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#C4A03C,#7EB8F7)",borderRadius:4}}/>
+                        </div>
+                      </div>
+                    ):null;
+                  })}
+                </div>
+              </div>
+
+              <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(196,160,60,0.08)",borderRadius:12,padding:20}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                  <div style={{fontSize:10,color:"#C4A03C",letterSpacing:2,textTransform:"uppercase"}}>⚡ Analisis AI</div>
+                  <button onClick={generateAI} disabled={aiLoading}
+                    style={{padding:"6px 13px",background:"rgba(196,160,60,0.08)",border:"1px solid rgba(196,160,60,0.2)",
+                      color:"#C4A03C",borderRadius:6,fontSize:11,cursor:aiLoading?"wait":"pointer"}}>
+                    {aiLoading?"Menganalisis…":"Generate Analisis"}
+                  </button>
+                </div>
+                {aiResult
+                  ?<div style={{fontSize:13,color:"#C8BAA0",lineHeight:1.8,whiteSpace:"pre-wrap"}}>{aiResult}</div>
+                  :<div style={{fontSize:11,color:"#2A2015",fontStyle:"italic"}}>Klik tombol di atas untuk mendapatkan analisis otomatis tentang Calendar of Events.</div>
+                }
+              </div>
+            </div>
+          )}
+
+          {/* ── FORM ── */}
+          {view==="form"&&(
+            <div style={{maxWidth:720}}>
+              {!isProvinsi&&(
+                <div style={{marginBottom:14,padding:"10px 14px",background:"rgba(76,175,130,0.07)",
+                  border:"1px solid rgba(76,175,130,0.15)",borderRadius:8,fontSize:11,color:"#4CAF82"}}>
+                  ℹ Anda menginput event untuk wilayah: <strong>{user.kabupatenKota}</strong>
+                </div>
+              )}
+              <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(196,160,60,0.1)",borderRadius:12,padding:24}}>
+                <FormSection title="Informasi Utama">
+                  <FormField label="Nama Event *" full>
+                    <input value={form.namaEvent} onChange={e=>setForm(f=>({...f,namaEvent:e.target.value}))}
+                      placeholder="Contoh: Festival Tabuik Piaman 2025" style={{...IS,width:"100%",boxSizing:"border-box"}} />
+                  </FormField>
+                  <FormField label="Provinsi / Kabupaten / Kota *">
+                    {isProvinsi ? (
+                      <select value={form.kabupatenKota} onChange={e=>setForm(f=>({...f,kabupatenKota:e.target.value}))} style={IS}>
+                        <option value="">-- Pilih --</option>
+                        {KABUPATEN_KOTA.map(k=><option key={k}>{k}</option>)}
+                      </select>
+                    ) : (
+                      <input value={user.kabupatenKota} disabled
+                        style={{...IS,opacity:.6,cursor:"not-allowed"}} />
+                    )}
+                  </FormField>
+                  <FormField label="Kategori *">
+                    <select value={form.kategori} onChange={e=>setForm(f=>({...f,kategori:e.target.value}))} style={IS}>
+                      <option value="">-- Pilih --</option>
+                      {KATEGORI.map(k=><option key={k}>{k}</option>)}
+                    </select>
+                  </FormField>
+                  <FormField label="Tanggal Mulai *">
+                    <input type="date" value={form.tanggalMulai} onChange={e=>setForm(f=>({...f,tanggalMulai:e.target.value}))} style={IS} />
+                  </FormField>
+                  <FormField label="Tanggal Selesai">
+                    <input type="date" value={form.tanggalSelesai} onChange={e=>setForm(f=>({...f,tanggalSelesai:e.target.value}))} style={IS} />
+                  </FormField>
+                  <FormField label="Lokasi / Venue" full>
+                    <input value={form.lokasi} onChange={e=>setForm(f=>({...f,lokasi:e.target.value}))}
+                      placeholder="Nama tempat, alamat..." style={{...IS,width:"100%",boxSizing:"border-box"}} />
+                  </FormField>
+                  <FormField label="Deskripsi Event" full>
+                    <textarea value={form.deskripsi} onChange={e=>setForm(f=>({...f,deskripsi:e.target.value}))}
+                      rows={3} placeholder="Deskripsi singkat..." style={{...IS,resize:"vertical",width:"100%",boxSizing:"border-box"}} />
+                  </FormField>
+                </FormSection>
+
+                <FormSection title="Data Teknis">
+                  <FormField label="Target Wisatawan">
+                    <input type="number" value={form.targetWisatawan} onChange={e=>setForm(f=>({...f,targetWisatawan:e.target.value}))}
+                      placeholder="Estimasi pengunjung" style={IS} />
+                  </FormField>
+                  <FormField label="Estimasi Anggaran (Rp)">
+                    <input type="number" value={form.anggaran} onChange={e=>setForm(f=>({...f,anggaran:e.target.value}))}
+                      placeholder="Nominal dalam Rupiah" style={IS} />
+                  </FormField>
+                </FormSection>
+
+                <FormSection title="Narahubung">
+                  <FormField label="Nama Kontak">
+                    <input value={form.kontakNama} onChange={e=>setForm(f=>({...f,kontakNama:e.target.value}))}
+                      placeholder="Nama penanggung jawab" style={IS} />
+                  </FormField>
+                  <FormField label="Nomor HP">
+                    <input value={form.kontakHP} onChange={e=>setForm(f=>({...f,kontakHP:e.target.value}))}
+                      placeholder="08xx..." style={IS} />
+                  </FormField>
+                  <FormField label="Email" full>
+                    <input type="email" value={form.kontakEmail} onChange={e=>setForm(f=>({...f,kontakEmail:e.target.value}))}
+                      placeholder="email@dinaspariwisata.go.id" style={{...IS,width:"100%",boxSizing:"border-box"}} />
+                  </FormField>
+                </FormSection>
+
+                <div style={{display:"flex",gap:12,marginTop:6}}>
+                  <button onClick={handleSubmit} style={{padding:"10px 24px",
+                    background:"linear-gradient(135deg,#C4A03C,#A07828)",color:"#0D1B0F",
+                    border:"none",borderRadius:8,fontSize:13,fontWeight:"bold",cursor:"pointer"}}>
+                    {editId?"Simpan Perubahan":"Simpan Event"}
+                  </button>
+                  <button onClick={()=>{setForm(initialForm);setEditId(null);setView("list");}}
+                    style={{padding:"10px 18px",background:"transparent",color:"#7A6E5A",
+                      border:"1px solid rgba(196,160,60,0.18)",borderRadius:8,fontSize:13,cursor:"pointer"}}>
+                    Batal
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── LIST ── */}
+          {view==="list"&&(
+            <div>
+              <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",
+                background:"rgba(255,255,255,0.015)",padding:14,borderRadius:10,
+                border:"1px solid rgba(196,160,60,0.07)"}}>
+                <input value={searchQ} onChange={e=>setSearchQ(e.target.value)}
+                  placeholder="🔍 Cari nama event / lokasi..."
+                  style={{...IS,flex:"1 1 190px",minWidth:160}} />
+                <select value={filterKab} onChange={e=>setFilterKab(e.target.value)} style={{...IS,flex:"1 1 150px"}}>
+                  <option value="">Semua Wilayah</option>
+                  {KABUPATEN_KOTA.map(k=><option key={k}>{k}</option>)}
+                </select>
+                <select value={filterKat} onChange={e=>setFilterKat(e.target.value)} style={{...IS,flex:"1 1 130px"}}>
+                  <option value="">Semua Kategori</option>
+                  {KATEGORI.map(k=><option key={k}>{k}</option>)}
+                </select>
+                <select value={filterBulan} onChange={e=>setFilterBulan(e.target.value)} style={{...IS,flex:"0 0 120px"}}>
+                  <option value="">Semua Bulan</option>
+                  {BULAN.map((b,i)=><option key={i} value={i}>{b}</option>)}
+                </select>
+                <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...IS,flex:"0 0 110px"}}>
+                  <option value="">Semua Status</option>
+                  <option>Draft</option><option>Diajukan</option>
+                </select>
+              </div>
+
+              <div style={{fontSize:10,color:"#4A4030",marginBottom:12}}>
+                Menampilkan {filtered.length} dari {events.length} event
+              </div>
+
+              {filtered.length===0&&(
+                <div style={{textAlign:"center",padding:"50px 0",color:"#2A2015"}}>
+                  <div style={{fontSize:34,marginBottom:10}}>◈</div>
+                  <div>Tidak ada event yang sesuai filter</div>
+                </div>
+              )}
+
+              {filtered.map(e=>{
+                const mine=canEditEvent(e);
+                return(
+                  <div key={e.id} onClick={()=>{setSelEvent(e);setView("detail");}}
+                    style={{background:"rgba(255,255,255,0.02)",
+                      border:`1px solid ${mine?"rgba(196,160,60,0.1)":"rgba(255,255,255,0.05)"}`,
+                      borderRadius:10,padding:"13px 18px",marginBottom:8,
+                      display:"flex",gap:14,alignItems:"flex-start",cursor:"pointer"}}>
+                    <div style={{width:42,height:42,borderRadius:8,flexShrink:0,
+                      background:"rgba(196,160,60,0.07)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>
+                      {e.kategori?.includes("Budaya")?"🎭":e.kategori?.includes("Olahraga")?"🏆":e.kategori?.includes("Kuliner")?"🍛":"✦"}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+                        <span style={{fontSize:14,fontWeight:"bold",color:"#E8DCC8"}}>{e.namaEvent}</span>
+                        <StatusBadge status={e.status}/>
+                      </div>
+                      <div style={{fontSize:11,color:"#6A5840",marginTop:3}}>{e.kabupatenKota} · {e.kategori} · {e.tanggalMulai}{e.tanggalSelesai?` s/d ${e.tanggalSelesai}`:""}</div>
+                      <div style={{fontSize:10,color:"#3A3020",marginTop:1}}>{e.lokasi}</div>
+                    </div>
+                    {mine&&(
+                      <div style={{display:"flex",gap:7,flexShrink:0,alignItems:"center"}} onClick={ev=>ev.stopPropagation()}>
+                        {e.status==="Draft"&&(
+                          <button onClick={()=>setAjukanConfirm(e.id)}
+                            style={{padding:"5px 11px",background:"rgba(76,175,130,0.12)",
+                              border:"1px solid rgba(76,175,130,0.3)",color:"#4CAF82",
+                              borderRadius:6,fontSize:11,cursor:"pointer",fontWeight:600}}>
+                            Ajukan
+                          </button>
+                        )}
+                        <button onClick={()=>handleEdit(e)} style={SB("#C4A03C")}>Edit</button>
+                        <button onClick={()=>setDelConfirm(e.id)} style={SB("#E05A5A")}>Hapus</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── CALENDAR ── */}
+          {view==="calendar"&&(
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:18}}>
+                <button onClick={()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);}}
+                  style={{...SB("#C4A03C"),padding:"6px 14px"}}>‹</button>
+                <div style={{fontSize:18,fontWeight:"bold",color:"#E8DCC8",minWidth:190,textAlign:"center"}}>
+                  {BULAN[calMonth]} {calYear}
+                </div>
+                <button onClick={()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);}}
+                  style={{...SB("#C4A03C"),padding:"6px 14px"}}>›</button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+                {["Min","Sen","Sel","Rab","Kam","Jum","Sab"].map(d=>(
+                  <div key={d} style={{textAlign:"center",fontSize:10,color:"#4A4030",padding:"5px 0",fontWeight:600}}>{d}</div>
+                ))}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+                {Array(getFD(calYear,calMonth)).fill(null).map((_,i)=><div key={`e${i}`} style={{minHeight:76}}/>)}
+                {Array(getDIM(calYear,calMonth)).fill(null).map((_,i)=>{
+                  const day=i+1, dayEvs=eInDay(day);
+                  const isToday=new Date().getFullYear()===calYear&&new Date().getMonth()===calMonth&&new Date().getDate()===day;
+                  return(
+                    <div key={day} style={{minHeight:76,borderRadius:5,padding:5,
+                      background:isToday?"rgba(196,160,60,0.07)":"rgba(255,255,255,0.015)",
+                      border:`1px solid ${isToday?"rgba(196,160,60,0.3)":"rgba(196,160,60,0.05)"}`}}>
+                      <div style={{fontSize:10,color:isToday?"#C4A03C":"#4A4030",fontWeight:isToday?"bold":"normal",marginBottom:3}}>{day}</div>
+                      {dayEvs.slice(0,2).map(e=>(
+                        <div key={e.id} onClick={()=>{setSelEvent(e);setView("detail");}}
+                          style={{fontSize:8,background:"rgba(196,160,60,0.15)",color:"#C4A03C",
+                            padding:"2px 4px",borderRadius:3,marginBottom:2,
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:"pointer"}}>
+                          {e.namaEvent}
+                        </div>
+                      ))}
+                      {dayEvs.length>2&&<div style={{fontSize:8,color:"#4A4030"}}>+{dayEvs.length-2}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── DETAIL ── */}
+          {view==="detail"&&selEvent&&(()=>{
+            const mine=canEditEvent(selEvent);
+            return(
+              <div style={{maxWidth:640}}>
+                <button onClick={()=>setView("list")} style={{...SB("#7A6E5A"),marginBottom:16}}>← Kembali</button>
+                <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(196,160,60,0.1)",borderRadius:12,padding:24}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                    <div>
+                      <h2 style={{fontSize:19,color:"#E8DCC8",margin:"0 0 8px"}}>{selEvent.namaEvent}</h2>
+                      <StatusBadge status={selEvent.status}/>
+                    </div>
+                    {mine&&(
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                        {selEvent.status==="Draft"&&(
+                          <button onClick={()=>setAjukanConfirm(selEvent.id)}
+                            style={{padding:"7px 16px",background:"rgba(76,175,130,0.15)",
+                              border:"1px solid rgba(76,175,130,0.35)",color:"#4CAF82",
+                              borderRadius:7,fontSize:12,cursor:"pointer",fontWeight:700}}>
+                            ✉ Ajukan ke Provinsi
+                          </button>
+                        )}
+                        {selEvent.status==="Diajukan"&&(
+                          <div style={{padding:"6px 12px",background:"rgba(76,175,130,0.08)",
+                            border:"1px solid rgba(76,175,130,0.2)",color:"#4CAF82",
+                            borderRadius:7,fontSize:11}}>
+                            ✓ Sudah Diajukan
+                          </div>
+                        )}
+                        <button onClick={()=>handleEdit(selEvent)} style={SB("#C4A03C")}>Edit</button>
+                        <button onClick={()=>setDelConfirm(selEvent.id)} style={SB("#E05A5A")}>Hapus</button>
+                      </div>
+                    )}
+                  </div>
+
+                  {[
+                    ["Provinsi / Kabupaten / Kota",selEvent.kabupatenKota],
+                    ["Kategori",selEvent.kategori],
+                    ["Tanggal Mulai",selEvent.tanggalMulai],
+                    ["Tanggal Selesai",selEvent.tanggalSelesai||"-"],
+                    ["Lokasi",selEvent.lokasi||"-"],
+                    ["Target Wisatawan",selEvent.targetWisatawan?parseInt(selEvent.targetWisatawan).toLocaleString("id-ID")+" orang":"-"],
+                    ["Estimasi Anggaran","Rp "+parseInt(selEvent.anggaran||0).toLocaleString("id-ID")],
+                    ["Kontak",selEvent.kontakNama?`${selEvent.kontakNama} · ${selEvent.kontakHP}`:"-"],
+                    ["Email",selEvent.kontakEmail||"-"],
+                  ].map(([k,v])=>(
+                    <div key={k} style={{display:"flex",gap:14,padding:"9px 0",borderBottom:"1px solid rgba(255,255,255,0.03)"}}>
+                      <div style={{fontSize:11,color:"#4A4030",minWidth:140}}>{k}</div>
+                      <div style={{fontSize:13,color:"#C8BAA0"}}>{v}</div>
+                    </div>
+                  ))}
+                  {selEvent.deskripsi&&(
+                    <div style={{marginTop:14}}>
+                      <div style={{fontSize:11,color:"#4A4030",marginBottom:7}}>Deskripsi</div>
+                      <div style={{fontSize:13,color:"#C8BAA0",lineHeight:1.7}}>{selEvent.deskripsi}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+        </div>
+      </div>
+
+      {/* ── TOAST ── */}
+      {toast&&(
+        <div style={{position:"fixed",bottom:22,right:22,zIndex:999,
+          background:toast.type==="error"?"#2A0808":toast.type==="info"?"#08102A":"#082214",
+          border:`1px solid ${toast.type==="error"?"#E05A5A":toast.type==="info"?"#7EB8F7":"#4CAF82"}`,
+          color:"#E8DCC8",padding:"11px 18px",borderRadius:8,fontSize:12,
+          boxShadow:"0 4px 20px rgba(0,0,0,0.5)",maxWidth:300}}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* ── DELETE CONFIRM ── */}
+      {delConfirm&&(
+        <Modal>
+          <div style={{fontSize:28,marginBottom:8}}>⚠</div>
+          <div style={{fontSize:14,color:"#E8DCC8",marginBottom:5}}>Hapus Event?</div>
+          <div style={{fontSize:11,color:"#4A4030",marginBottom:18}}>Tindakan ini tidak dapat dibatalkan.</div>
+          <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+            <button onClick={()=>handleDelete(delConfirm)}
+              style={{padding:"8px 18px",background:"rgba(140,20,20,0.8)",color:"#FFD0D0",border:"1px solid #E05A5A",borderRadius:6,cursor:"pointer",fontSize:12}}>
+              Ya, Hapus
+            </button>
+            <button onClick={()=>setDelConfirm(null)}
+              style={{padding:"8px 16px",background:"transparent",color:"#7A6E5A",border:"1px solid rgba(196,160,60,0.18)",borderRadius:6,cursor:"pointer",fontSize:12}}>
+              Batal
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── AJUKAN CONFIRM ── */}
+      {ajukanConfirm&&(
+        <Modal>
+          <div style={{fontSize:28,marginBottom:8}}>✉</div>
+          <div style={{fontSize:14,color:"#E8DCC8",marginBottom:5}}>Ajukan Event?</div>
+          <div style={{fontSize:11,color:"#4A4030",marginBottom:6}}>
+            Event akan dikirimkan ke Dinas Pariwisata Provinsi Sumatera Barat.
+          </div>
+          <div style={{fontSize:10,color:"#3A3020",marginBottom:18}}>Status akan berubah menjadi <strong style={{color:"#4CAF82"}}>Diajukan</strong> dan tidak dapat diubah kembali ke Draft.</div>
+          <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+            <button onClick={()=>handleAjukan(ajukanConfirm)}
+              style={{padding:"8px 18px",background:"rgba(76,175,130,0.2)",color:"#4CAF82",border:"1px solid rgba(76,175,130,0.4)",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:700}}>
+              Ya, Ajukan
+            </button>
+            <button onClick={()=>setAjukanConfirm(null)}
+              style={{padding:"8px 16px",background:"transparent",color:"#7A6E5A",border:"1px solid rgba(196,160,60,0.18)",borderRadius:6,cursor:"pointer",fontSize:12}}>
+              Batal
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── IMPORT CONFIRM ── */}
+      {importConfirm&&(
+        <Modal>
+          <div style={{fontSize:28,marginBottom:8}}>📂</div>
+          <div style={{fontSize:14,color:"#E8DCC8",marginBottom:5}}>File Backup Ditemukan</div>
+          <div style={{fontSize:12,color:"#7A6E5A",marginBottom:16}}>
+            <strong style={{color:"#C4A03C"}}>{importConfirm.count} event</strong> siap diimport.
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:9,width:"100%"}}>
+            <button onClick={()=>confirmImport("merge")}
+              style={{padding:"10px",background:"rgba(196,160,60,0.08)",border:"1px solid rgba(196,160,60,0.25)",color:"#C4A03C",borderRadius:8,cursor:"pointer",fontSize:12}}>
+              🔀 Gabungkan dengan data saat ini
+            </button>
+            <button onClick={()=>confirmImport("replace")}
+              style={{padding:"10px",background:"rgba(224,90,90,0.08)",border:"1px solid rgba(224,90,90,0.22)",color:"#E05A5A",borderRadius:8,cursor:"pointer",fontSize:12}}>
+              ♻ Ganti semua data dengan file ini
+            </button>
+            <button onClick={()=>setImportConfirm(null)}
+              style={{padding:"8px",background:"transparent",border:"1px solid rgba(255,255,255,0.05)",color:"#4A4030",borderRadius:8,cursor:"pointer",fontSize:11}}>
+              Batal
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── SHARED COMPONENTS ─────────────────────────────────────────
+function Modal({children}) {
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:200,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{background:"#0B1A0D",border:"1px solid rgba(196,160,60,0.15)",borderRadius:14,padding:28,maxWidth:370,width:"90%",textAlign:"center"}}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SidebarAction({icon,label,sub,color,onClick}) {
+  const [hover,setHover]=useState(false);
+  return(
+    <button onClick={onClick} onMouseEnter={()=>setHover(true)} onMouseLeave={()=>setHover(false)}
+      style={{display:"flex",alignItems:"center",gap:10,width:"100%",
+        padding:"8px 12px",marginBottom:2,borderRadius:7,border:"none",
+        background:hover?"rgba(255,255,255,0.035)":"transparent",cursor:"pointer",textAlign:"left",transition:"background 0.15s"}}>
+      <span style={{fontSize:15}}>{icon}</span>
+      <div>
+        <div style={{fontSize:12,color,fontWeight:600}}>{label}</div>
+        <div style={{fontSize:9,color:"#2A2015",marginTop:1}}>{sub}</div>
+      </div>
+    </button>
+  );
+}
+
+function FormSection({title,children}) {
+  return(
+    <div style={{marginBottom:20}}>
+      <div style={{fontSize:10,color:"#C4A03C",letterSpacing:2,textTransform:"uppercase",
+        marginBottom:12,paddingBottom:7,borderBottom:"1px solid rgba(196,160,60,0.1)"}}>
+        {title}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>{children}</div>
+    </div>
+  );
+}
+
+function FormField({label,children,full}) {
+  return(
+    <div style={{gridColumn:full?"1 / -1":"auto"}}>
+      <label style={{fontSize:11,color:"#4A4030",display:"block",marginBottom:5}}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function StatusBadge({status}) {
+  const s=STATUS_BADGE[status]||STATUS_BADGE["Draft"];
+  return(
+    <span style={{fontSize:10,padding:"2px 8px",borderRadius:4,
+      background:s.bg,color:s.color,border:`1px solid ${s.border}`,fontFamily:"sans-serif"}}>
+      {status}
+    </span>
+  );
+}
+
+const IS={background:"rgba(255,255,255,0.04)",border:"1px solid rgba(196,160,60,0.16)",
+  color:"#E8DCC8",padding:"9px 12px",borderRadius:6,fontSize:13,outline:"none",fontFamily:"inherit"};
+
+const SB=(color)=>({padding:"5px 11px",background:"transparent",
+  border:`1px solid ${color}40`,color,borderRadius:6,fontSize:11,cursor:"pointer"});
+
+
+    const rootEl = ReactDOM.createRoot(document.getElementById('root'));
+    rootEl.render(React.createElement(App));
+  </script>
+</body>
+</html>
